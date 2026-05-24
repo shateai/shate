@@ -23,11 +23,5 @@
       "type": "image/png",
       "purpose": "any"
     }
-  ],
-  "shortcuts": [
-    {
-      "name": "Spustit Shate",
-      "url": "./"
-    }
   ]
 }
