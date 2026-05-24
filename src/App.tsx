@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, FormEvent, TouchEvent } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Smartphone, Mic, PhoneOff, Sparkles, X, History, ChevronLeft, ChevronRight, Calendar, ArrowLeft, LogIn, Clock, Settings, LogOut, Sliders, Zap } from "lucide-react";
+import { Smartphone, Mic, PhoneOff, Sparkles, X, History, ChevronLeft, ChevronRight, Calendar, ArrowLeft, LogIn, Clock, Settings, LogOut, Sliders, Zap, Key } from "lucide-react";
 import { pcmToBase64, base64ToFloat32 } from "./lib/audio-utils";
-import { collection, addDoc, query, where, orderBy, onSnapshot, deleteDoc, doc, serverTimestamp, updateDoc } from "firebase/firestore";
+import { collection, addDoc, query, where, orderBy, onSnapshot, deleteDoc, doc, serverTimestamp, updateDoc, setDoc } from "firebase/firestore";
 import { db, auth } from "./lib/firebase";
 import { onAuthStateChanged, signInWithPopup, signInAnonymously, GoogleAuthProvider, signOut, User } from "firebase/auth";
 import PhotoManager from "./components/PhotoManager";
@@ -113,13 +113,19 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
+  // Gemini API Key Dynamic Sharing State
+  const [geminiApiKey, setGeminiApiKey] = useState("");
+  const [isStoringKey, setIsStoringKey] = useState(false);
+  const [storedApiKeyExists, setStoredApiKeyExists] = useState(false);
+  const [storedApiKeyMasked, setStoredApiKeyMasked] = useState("");
+
   // History state management
   const [showSettings, setShowSettings] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [savedCards, setSavedCards] = useState<StudyCardDoc[]>([]);
   const [activePanelType, setActivePanelType] = useState<'general' | 'morning' | 'evening'>('general');
-  const DEFAULT_MORNING_ROUTINE = "";
-  const DEFAULT_EVENING_ROUTINE = "";
+  const DEFAULT_MORNING_ROUTINE = "### Ranní rutina ☀️\n";
+  const DEFAULT_EVENING_ROUTINE = "### Večerní rutina 🌙\n";
   const [showHistory, setShowHistory] = useState(false);
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [userId, setUserId] = useState<string>("");
@@ -171,6 +177,39 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // Listen to Firestore for shared Gemini API key updates
+  useEffect(() => {
+    if (!user) {
+      setStoredApiKeyExists(false);
+      setStoredApiKeyMasked("");
+      return;
+    }
+    const unsub = onSnapshot(doc(db, "settings", "gemini"), (snapshot) => {
+      try {
+        if (snapshot.exists()) {
+          const val = snapshot.data();
+          setStoredApiKeyExists(true);
+          if (val && val.apiKey) {
+            const keyStr = val.apiKey;
+            if (keyStr.length > 10) {
+              setStoredApiKeyMasked(keyStr.slice(0, 7) + "..." + keyStr.slice(-4));
+            } else {
+              setStoredApiKeyMasked("Aktivní");
+            }
+          }
+        } else {
+          setStoredApiKeyExists(false);
+          setStoredApiKeyMasked("");
+        }
+      } catch (err) {
+        console.error("Failed to fetch settings from Firestore:", err);
+      }
+    }, (error) => {
+      console.warn("Permission restricted or failed checking settings document:", error);
+    });
+    return () => unsub();
+  }, [user]);
+
   const loginWithGoogle = async () => {
     setIsLoggingIn(true);
     setAuthError(null);
@@ -219,6 +258,25 @@ export default function App() {
       setStatus("Odhlášeno");
     } catch (err) {
       console.error("Signout Error:", err);
+    }
+  };
+
+  const handleSaveApiKey = async () => {
+    if (!geminiApiKey.trim()) return;
+    setIsStoringKey(true);
+    try {
+      await setDoc(doc(db, "settings", "gemini"), {
+        apiKey: geminiApiKey.trim(),
+        updatedAt: new Date().toISOString(),
+        updatedBy: user ? user.uid : "anonymous"
+      });
+      setGeminiApiKey("");
+      setStatus("Gemini API klíč úspěšně uložen pro všechny");
+    } catch (err) {
+      console.error("Failed to store API key in Firestore:", err);
+      setStatus("Chyba při ukládání klíče");
+    } finally {
+      setIsStoringKey(false);
     }
   };
 
@@ -402,38 +460,20 @@ export default function App() {
       evening: "Večerní rutina"
     };
 
-    // 1. Try to find a card explicitly matching targetDateStr AND subject of that type
-    let match = savedCards.find(c => 
+    if (type === 'morning') {
+      return savedCards.find(c => c.subject === "Ranní rutina" || (c as any).targetDateStr === "routine_morning") || null;
+    }
+    if (type === 'evening') {
+      return savedCards.find(c => c.subject === "Večerní rutina" || (c as any).targetDateStr === "routine_evening") || null;
+    }
+
+    // Try to find a card explicitly matching targetDateStr AND subject of that type
+    const match = savedCards.find(c => 
       (c as any).targetDateStr === key && 
       (c.subject === subjectMap[type] || (!c.subject && type === 'general'))
     );
-    if (match) return match;
-
-    // For general cards, fallback to older style models without explicit subject or matching current date
-    if (type === 'general') {
-      match = savedCards.find(c => (c as any).targetDateStr === key);
-      if (match) return match;
-
-      match = savedCards.find(card => {
-        if (!card.createdAt?.seconds) return false;
-        const cardDate = new Date(card.createdAt.seconds * 1000);
-        return (
-          cardDate.getDate() === date.getDate() &&
-          cardDate.getMonth() === date.getMonth() &&
-          cardDate.getFullYear() === date.getFullYear()
-        );
-      });
-      if (match) return match;
-
-      const dateDayNameStr = date.toLocaleDateString("cs-CZ", { weekday: "long" }).toLowerCase();
-      match = savedCards.find(card => {
-        const lblLower = (card.topic || "").toLowerCase();
-        return lblLower.includes(dateDayNameStr);
-      });
-      if (match) return match;
-    }
-
-    return null;
+    
+    return match || null;
   };
 
   const getCardContentAndId = (date: Date, type: 'general' | 'morning' | 'evening') => {
@@ -441,11 +481,10 @@ export default function App() {
     if (card) {
       return { id: card.id, content: card.content, topic: card.topic, isDefault: false };
     } else {
-      const key = formatDateKey(date);
       if (type === 'morning') {
-        return { id: `virtual-morning-${key}`, content: DEFAULT_MORNING_ROUTINE, topic: "Ranní rutina", isDefault: true };
+        return { id: `virtual-morning`, content: DEFAULT_MORNING_ROUTINE, topic: "Ranní rutina", isDefault: true };
       } else if (type === 'evening') {
-        return { id: `virtual-evening-${key}`, content: DEFAULT_EVENING_ROUTINE, topic: "Večerní rutina", isDefault: true };
+        return { id: `virtual-evening`, content: DEFAULT_EVENING_ROUTINE, topic: "Večerní rutina", isDefault: true };
       } else {
         return { id: null, content: "", topic: "Dodatečné úkoly", isDefault: true };
       }
@@ -489,19 +528,25 @@ export default function App() {
   ) => {
     if (!userId || !topic) return;
     
-    const resolvedDateStr = targetDateStr || formatDateKey(selectedDate);
     const targetSubject = subjectName || "Denní plán";
+    const isRoutine = targetSubject === "Ranní rutina" || targetSubject === "Večerní rutina";
+    const resolvedDateStr = isRoutine 
+      ? (targetSubject === "Ranní rutina" ? "routine_morning" : "routine_evening")
+      : (targetDateStr || formatDateKey(selectedDate));
 
     // Find card that belongs to this specific date AND has the same subject,
     // OR matches exactly by topic name (for general non-date topic cards).
     const existingCard = savedCards.find(
       card => {
         const cardDate = (card as any).targetDateStr;
+        const cardSubject = card.subject || "Denní plán";
+        if (isRoutine) {
+          return cardSubject === targetSubject || cardDate === resolvedDateStr;
+        }
         if (cardDate && cardDate === resolvedDateStr) {
-          const cardSubject = card.subject || "Denní plán";
           return cardSubject === targetSubject;
         }
-        if (!cardDate) {
+        if (!cardDate && !isRoutine) {
           return card.topic.toLowerCase().trim() === topic.toLowerCase().trim();
         }
         return false;
@@ -641,7 +686,11 @@ export default function App() {
     } else {
       const subjectName = type === 'morning' ? "Ranní rutina" : type === 'evening' ? "Večerní rutina" : "Denní plán";
       const topicName = type === 'morning' ? "Ranní rutina" : type === 'evening' ? "Večerní rutina" : "Dodatečné úkoly";
-      const resolvedDateStr = formatDateKey(date);
+      const resolvedDateStr = type === 'morning' 
+        ? "routine_morning" 
+        : type === 'evening' 
+          ? "routine_evening" 
+          : formatDateKey(date);
 
       try {
         await addDoc(collection(db, "study-cards"), {
@@ -909,6 +958,25 @@ export default function App() {
         if (msg.type === "open_settings_view") {
           setShowSettings(true);
           setStatus("Nastavení otevřeno");
+          return;
+        }
+
+        if (msg.type === "close_settings_view") {
+          setShowSettings(false);
+          setStatus("Nastavení zavřeno");
+          return;
+        }
+
+        if (msg.type === "switch_panel") {
+          const panel = msg.panel || "Denní plán";
+          if (panel.toLowerCase().includes("ranní") || panel.toLowerCase().includes("morning")) {
+            setActivePanelType('morning');
+          } else if (panel.toLowerCase().includes("večerní") || panel.toLowerCase().includes("evening")) {
+            setActivePanelType('evening');
+          } else {
+            setActivePanelType('general');
+          }
+          setStatus(`Přepnuto na panel: ${panel}`);
           return;
         }
 
@@ -1233,15 +1301,11 @@ export default function App() {
 
             const hasCard = savedCards.some(card => {
               if ((card as any).targetDateStr) {
-                return (card as any).targetDateStr === formatDateKey(date);
+                const isTargetDate = (card as any).targetDateStr === formatDateKey(date);
+                const isScheduleSubject = card.subject === "Denní plán" || card.subject === "Ranní rutina" || card.subject === "Večerní rutina";
+                return isTargetDate && isScheduleSubject;
               }
-              if (!card.createdAt?.seconds) return false;
-              const cardDate = new Date(card.createdAt.seconds * 1000);
-              return (
-                cardDate.getDate() === date.getDate() &&
-                cardDate.getMonth() === date.getMonth() &&
-                cardDate.getFullYear() === date.getFullYear()
-              );
+              return false;
             });
 
             return (
@@ -1329,12 +1393,7 @@ export default function App() {
                       )}
                     </div>
 
-                    {/* Carousel indicator dots */}
-                    <div className="flex justify-center gap-1.5 mt-2.5 shrink-0" id="panel-dots-bar">
-                      <button onClick={() => setActivePanelType('general')} className="w-1.5 h-1.5 rounded-full transition-all cursor-pointer bg-white" style={{ opacity: activePanelType === 'general' ? 1 : 0.2, width: activePanelType === 'general' ? '12px' : '6px' }} />
-                      <button onClick={() => setActivePanelType('morning')} className="w-1.5 h-1.5 rounded-full transition-all cursor-pointer bg-white" style={{ opacity: activePanelType === 'morning' ? 1 : 0.2, width: activePanelType === 'morning' ? '12px' : '6px' }} />
-                      <button onClick={() => setActivePanelType('evening')} className="w-1.5 h-1.5 rounded-full transition-all cursor-pointer bg-white" style={{ opacity: activePanelType === 'evening' ? 1 : 0.2, width: activePanelType === 'evening' ? '12px' : '6px' }} />
-                    </div>
+
 
                   </div>
                 </div>
@@ -1524,6 +1583,47 @@ export default function App() {
                   <p className="text-[9px] text-zinc-500 leading-normal">
                     Vyšší rychlost odpovídá přirozenějšímu tónu Shate. Výchozí je 1.4x.
                   </p>
+                </div>
+
+                {/* Shared Gemini API key configuration */}
+                <div className="space-y-2 border border-white/[5%] p-3 bg-[#0f111f]/60 rounded-xl">
+                  <span className="text-[10px] font-mono tracking-wider text-indigo-400 uppercase font-black flex items-center gap-1.5">
+                    <Key className="w-3.5 h-3.5" />
+                    Sdílený Gemini API Klíč
+                  </span>
+                  
+                  {storedApiKeyExists ? (
+                    <div className="flex items-center gap-1.5 bg-emerald-500/5 border border-emerald-500/10 p-2 rounded-lg text-[10px] text-emerald-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <span>Aktivní klíč: <strong className="font-mono text-zinc-350">{storedApiKeyMasked}</strong></span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 bg-[#ef4444]/5 border border-rose-500/10 p-2 rounded-lg text-[10px] text-rose-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                      <span>Žádný klíč v DB (běží z defaultu)</span>
+                    </div>
+                  )}
+
+                  <p className="text-[9px] text-zinc-500 leading-normal">
+                    První zadaný klíč se bezpečně uloží, odkud jej bezplatně čerpají všichni uživatelé.
+                  </p>
+
+                  <div className="flex gap-1.5 pt-1">
+                    <input
+                      type="password"
+                      placeholder="AIzaSy..."
+                      value={geminiApiKey}
+                      onChange={(e) => setGeminiApiKey(e.target.value)}
+                      className="flex-1 bg-black/40 border border-white/[8%] focus:border-[#4f5ff7]/40 focus:outline-none rounded-lg text-xs px-2.5 py-1.5 font-mono text-zinc-300 placeholder-zinc-650 truncate min-w-0"
+                    />
+                    <button
+                      onClick={handleSaveApiKey}
+                      disabled={isStoringKey || !geminiApiKey.trim()}
+                      className="bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/20 text-indigo-300 disabled:opacity-30 disabled:pointer-events-none rounded-lg text-[10px] font-bold uppercase tracking-wider px-3 transition-all cursor-pointer select-none whitespace-nowrap active:scale-95 flex items-center justify-center min-h-[30px]"
+                    >
+                      {isStoringKey ? "Ukládám..." : "Uložit"}
+                    </button>
+                  </div>
                 </div>
 
                 {/* Profile Settings info */}

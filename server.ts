@@ -14,16 +14,54 @@ app.use(express.json({ limit: "25mb" }));
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
-async function startServer() {
-  const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY,
+let cachedAiClient: GoogleGenAI | null = null;
+let lastUsedApiKey: string | null = null;
+
+async function fetchSharedApiKey(): Promise<string | null> {
+  try {
+    const projectId = "gen-lang-client-0057515834";
+    const apiKey = "AIzaSyDJreMZv1CexPEftGXJIGaBMrYB446Eq7Y";
+    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/settings/gemini?key=${apiKey}`;
+    
+    const res = await fetch(url);
+    if (!res.ok) {
+      return null;
+    }
+    const data = await res.json();
+    if (data && data.fields && data.fields.apiKey && data.fields.apiKey.stringValue) {
+      return data.fields.apiKey.stringValue;
+    }
+  } catch (err) {
+    console.error("Error fetching shared API key from Firestore:", err);
+  }
+  return null;
+}
+
+async function getAiClient(): Promise<GoogleGenAI> {
+  const dbApiKey = await fetchSharedApiKey();
+  const keyToUse = dbApiKey || process.env.GEMINI_API_KEY;
+  if (!keyToUse) {
+    throw new Error("No Gemini API key found. Please configure it in Settings or environment variables.");
+  }
+  
+  if (cachedAiClient && lastUsedApiKey === keyToUse) {
+    return cachedAiClient;
+  }
+  
+  console.log(`Initializing GoogleGenAI client with key: ${keyToUse.slice(0, 10)}...`);
+  cachedAiClient = new GoogleGenAI({
+    apiKey: keyToUse,
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
       }
     }
   });
+  lastUsedApiKey = keyToUse;
+  return cachedAiClient;
+}
 
+async function startServer() {
   // Upgrade handling for WebSockets
   server.on('upgrade', (request, socket, head) => {
     const { pathname } = new URL(request.url || '', `http://${request.headers.host}`);
@@ -51,7 +89,8 @@ async function startServer() {
     let hasPendingStateSync = false;
 
     try {
-      session = await ai.live.connect({
+      const activeAi = await getAiClient();
+      session = await activeAi.live.connect({
         model: "gemini-3.1-flash-live-preview",
         callbacks: {
           onmessage: async (message: LiveServerMessage) => {
@@ -98,7 +137,8 @@ async function startServer() {
                     let usedSearch = true;
                     try {
                       console.log(`Starting background grounding query for: "${topic}"`);
-                      bgRes = await ai.models.generateContent({
+                      const activeAi = await getAiClient();
+                      bgRes = await activeAi.models.generateContent({
                         model: "gemini-3.5-flash",
                         contents: `Vytvoř prosím přehledný pomocný tahák (cheat sheet) k učení a krátký přehled na téma "${topic}". 
 Výsledek vrať VÝHRADNĚ jako platný JSON objekt se dvěma klíči:
@@ -113,7 +153,8 @@ Nevracej žádné jiné věci nebo text okolo, pouze čistý platný JSON objekt
                       console.warn("Background grounding search with Google Search tool failed, trying fallback without Google Search...", searchErr.message || searchErr);
                       usedSearch = false;
                       try {
-                        bgRes = await ai.models.generateContent({
+                        const activeAi = await getAiClient();
+                        bgRes = await activeAi.models.generateContent({
                           model: "gemini-3.5-flash",
                           contents: `Vytvoř prosím přehledný pomocný tahák (cheat sheet) z tvých znalostí na téma "${topic}".
 Výsledek vrať VÝHRADNĚ jako platný JSON objekt se dvěma klíči:
@@ -424,25 +465,47 @@ Výsledek vrať VÝHRADNĚ jako platný JSON objekt se dvěma klíči:
                   let planFound = false;
 
                   if (targetSubject) {
-                    const matchedCard = cachedExistingCards.find(card => 
-                      card.targetDateStr === targetDateStr && 
-                      (card.subject || "Denní plán").toLowerCase().trim() === targetSubject.toLowerCase().trim()
-                    );
+                    const isMorning = targetSubject.toLowerCase().includes("ranní") || targetSubject.toLowerCase().includes("morning");
+                    const isEvening = targetSubject.toLowerCase().includes("večerní") || targetSubject.toLowerCase().includes("evening");
+
+                    const matchedCard = cachedExistingCards.find(card => {
+                      const cardSub = (card.subject || "Denní plán").toLowerCase();
+                      if (isMorning) {
+                        return cardSub.includes("ranní") || card.targetDateStr === "routine_morning";
+                      }
+                      if (isEvening) {
+                        return cardSub.includes("večerní") || card.targetDateStr === "routine_evening";
+                      }
+                      return card.targetDateStr === targetDateStr && (cardSub.includes("denní") || cardSub.includes("plán") || cardSub.includes("doplň"));
+                    });
+
                     if (matchedCard) {
                       planFound = true;
-                      planContent = `Panel "${targetSubject}":\n${matchedCard.content}`;
+                      planContent = `### Panel: "${matchedCard.subject || "Denní plán"}"\n${matchedCard.content}`;
                     } else {
-                      planContent = `V panelu "${targetSubject}" pro den ${targetDateStr} zatím nejsou žádné úkoly.`;
+                      const label = isMorning ? "Ranní rutina" : (isEvening ? "Večerní rutina" : "Denní plán");
+                      planContent = `V panelu "${label}" pro den ${targetDateStr} zatím nejsou žádné úkoly.`;
                     }
                   } else {
-                    // List all panels for that day
-                    const matchingCards = cachedExistingCards.filter(card => card.targetDateStr === targetDateStr);
-                    if (matchingCards.length > 0) {
-                      planFound = true;
-                      planContent = matchingCards.map(c => `### Panel: "${c.subject || "Denní plán"}" (Záhlaví: "${c.topic}"):\n${c.content}`).join("\n\n");
-                    } else {
-                      planContent = `Pro den ${targetDateStr} zatím nejsou naplánovány žádné úkoly ani rutiny v žádném panelu. Všechny karty jsou momentálně prázdné.`;
-                    }
+                    // List all three panels (morning, evening, and the specific day's Denní plán)
+                    const morningCard = cachedExistingCards.find(card => 
+                      (card.subject || "").toLowerCase().includes("ranní") || card.targetDateStr === "routine_morning"
+                    );
+                    const eveningCard = cachedExistingCards.find(card => 
+                      (card.subject || "").toLowerCase().includes("večerní") || card.targetDateStr === "routine_evening"
+                    );
+                    const dailyCard = cachedExistingCards.find(card => 
+                      card.targetDateStr === targetDateStr && 
+                      ((card.subject || "Denní plán").toLowerCase().includes("denní") || (card.subject || "Denní plán").toLowerCase().includes("plán"))
+                    );
+
+                    const sections: string[] = [];
+                    sections.push(`### Panel: "Ranní rutina" (Globální rutina)\n${morningCard ? morningCard.content : "- Zatím žádné úkoly v ranní rutině."}`);
+                    sections.push(`### Panel: "Večerní rutina" (Globální rutina)\n${eveningCard ? eveningCard.content : "- Zatím žádné úkoly ve večerní rutině."}`);
+                    sections.push(`### Panel: "Denní plán" (Pro konkrétní datum ${targetDateStr})\n${dailyCard ? dailyCard.content : "- Zatím žádné doplňující úkoly pro tento den."}`);
+
+                    planFound = true;
+                    planContent = sections.join("\n\n");
                   }
 
                   try {
@@ -467,9 +530,9 @@ Výsledek vrať VÝHRADNĚ jako platný JSON objekt se dvěma klíči:
                   }
                 }
 
-                if (fc.name === "open_subject") {
-                  const subject = (fc.args as any)?.subject || "Všeobecné";
-                  console.log(`Intercepted open_subject request: subject="${subject}"`);
+                if (fc.name === "switch_panel") {
+                  const panel = (fc.args as any)?.panel || "Denní plán";
+                  console.log(`Intercepted switch_panel request: panel="${panel}"`);
 
                   try {
                     session.sendToolResponse({
@@ -478,141 +541,19 @@ Výsledek vrať VÝHRADNĚ jako platný JSON objekt se dvěma klíči:
                         name: fc.name,
                         response: {
                           output: {
-                            status: `Předmět ${subject} byl úspěšně otevřen v rozhraní.`
+                            status: `Aktivní panel v rozhraní byl úspěšně přepnut na ${panel}`
                           }
                         }
                       }]
                     });
                   } catch (err) {
-                    console.error("Failed to send tool response for open_subject:", err);
+                    console.error("Failed to send tool response for switch_panel:", err);
                   }
 
                   if (clientWs.readyState === WebSocket.OPEN) {
                     clientWs.send(JSON.stringify({
-                      type: "open_subject",
-                      subject: subject
-                    }));
-                  }
-                }
-
-                if (fc.name === "open_osnova") {
-                  const subject = (fc.args as any)?.subject || "Všeobecné";
-                  const osnova = (fc.args as any)?.osnova || "";
-                  console.log(`Intercepted open_osnova request: subject="${subject}" osnova="${osnova}"`);
-
-                  try {
-                    session.sendToolResponse({
-                      functionResponses: [{
-                        id: fc.id,
-                        name: fc.name,
-                        response: {
-                          output: {
-                            status: `Osnova ${osnova} v předmětu ${subject} byla úspěšně otevřena v rozhraní.`
-                          }
-                        }
-                      }]
-                    });
-                  } catch (err) {
-                    console.error("Failed to send tool response for open_osnova:", err);
-                  }
-
-                  if (clientWs.readyState === WebSocket.OPEN) {
-                    clientWs.send(JSON.stringify({
-                      type: "open_osnova",
-                      subject: subject,
-                      osnova: osnova
-                    }));
-                  }
-                }
-
-                if (fc.name === "open_lesson") {
-                  const subject = (fc.args as any)?.subject || "Všeobecné";
-                  const osnova = (fc.args as any)?.osnova || "";
-                  const lessonIndex = Number((fc.args as any)?.lessonIndex || 1);
-                  console.log(`Intercepted open_lesson request: subject="${subject}" osnova="${osnova}" lessonIndex=${lessonIndex}`);
-
-                  try {
-                    session.sendToolResponse({
-                      functionResponses: [{
-                        id: fc.id,
-                        name: fc.name,
-                        response: {
-                          output: {
-                            status: `Lekce ${lessonIndex} v osnově ${osnova} v předmětu ${subject} byla úspěšně otevřena v rozhraní.`
-                          }
-                        }
-                      }]
-                    });
-                  } catch (err) {
-                    console.error("Failed to send tool response for open_lesson:", err);
-                  }
-
-                  if (clientWs.readyState === WebSocket.OPEN) {
-                    clientWs.send(JSON.stringify({
-                      type: "open_lesson",
-                      subject: subject,
-                      osnova: osnova,
-                      lessonIndex: lessonIndex
-                    }));
-                  }
-                }
-
-                if (fc.name === "open_dashboard") {
-                  console.log("Intercepted open_dashboard request");
-
-                  try {
-                    session.sendToolResponse({
-                      functionResponses: [{
-                        id: fc.id,
-                        name: fc.name,
-                        response: {
-                          output: {
-                            status: "Přehled předmětů byl úspěšně zobrazen na obrazovce."
-                          }
-                        }
-                      }]
-                    });
-                  } catch (err) {
-                    console.error("Failed to send tool response for open_dashboard:", err);
-                  }
-
-                  if (clientWs.readyState === WebSocket.OPEN) {
-                    clientWs.send(JSON.stringify({
-                      type: "open_dashboard"
-                    }));
-                  }
-                }
-
-                if (fc.name === "delete_lessons_or_osnova") {
-                  const subject = (fc.args as any)?.subject || "Všeobecné";
-                  const osnova = (fc.args as any)?.osnova || "";
-                  const lessonIndex = (fc.args as any)?.lessonIndex ? Number((fc.args as any).lessonIndex) : null;
-                  console.log(`Intercepted delete_lessons_or_osnova request: subject="${subject}" osnova="${osnova}" lessonIndex=${lessonIndex}`);
-
-                  try {
-                    session.sendToolResponse({
-                      functionResponses: [{
-                        id: fc.id,
-                        name: fc.name,
-                        response: {
-                          output: {
-                            status: lessonIndex 
-                              ? `Lekce ${lessonIndex} v osnově ${osnova} v předmětu ${subject} byla úspěšně smazána.`
-                              : `Osnova ${osnova} se všemi svými lekcemi v předmětu ${subject} byla úspěšně smazána.`
-                          }
-                        }
-                      }]
-                    });
-                  } catch (err) {
-                    console.error("Failed to send tool response for delete_lessons_or_osnova:", err);
-                  }
-
-                  if (clientWs.readyState === WebSocket.OPEN) {
-                    clientWs.send(JSON.stringify({
-                      type: "delete_lessons_or_osnova",
-                      subject: subject,
-                      osnova: osnova,
-                      lessonIndex: lessonIndex
+                      type: "switch_panel",
+                      panel: panel
                     }));
                   }
                 }
@@ -625,26 +566,36 @@ Výsledek vrať VÝHRADNĚ jako platný JSON objekt se dvěma klíči:
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } }, 
           },
-          systemInstruction: "POZNÁMKA K INICIACI RELACE: Na začátku relace nebo po spuštění spojení NIKDY nic neříkej jako první, neposílej žádné automatické uvítání a nezačínej mluvit sám od sebe. Zůstaň naprosto potichu, neodpovídej na synchronizační systémové aktualizace a tiché aktualizace stavu, a vyčkej, až uživatel sám jako první promluví do mikrofonu!\n\nJsi Shate, inteligentní hlasový asistent a osobní denní plánovač. Mluv česky, stručně, srozumitelně a klidně. Vždy vystupuj jako kluk/muž (mluv v mužském rodě, např. 'přidal jsem', 'naplánoval jsem').\n\nPŘÍSNÉ ZÁKAZY A PRAVIDLA PRO PŘIDÁVÁNÍ ÚKOLŮ:\n1. NIKDY NEGENERUJ ŽÁDNÉ VLASTNÍ NEBO DOPLŇUJÍCÍ ÚKOLY, o které tě uživatel sám výslovně nepožádal. Je PŘÍSNĚ ZAKÁZÁNO si vymýšlet jakékoliv neobjednané úkoly navíc, doporučení, nápady či doplňky. Pokud uživatel zadá jeden úkol, ulož POUZE ten jeden úkol.\n2. Při zakládání či úpravě Ranní nebo Večerní rutiny neaktivuj ŽÁDNÉ výchozí položky. Ranní i večerní rutina startují zcela prázdné a obsahují výhradně to, co ti sám uživatel nadiktuje!\n\nTŘI PANELY NA KAŽDÝ DEN (STARTUJÍ ÚPLNĚ PRÁZDNÉ):\nKaždý den má 3 hlavní panely/karty s úkoly, které může uživatel odškrtávat. Na začátku dne startují jako ÚPLNĚ PRÁZDNÉ (nemají žádný výchozí obsah):\n1. Ranní rutina (subject: 'Ranní rutina', topic: 'Ranní rutina') - ranní rituály a úkoly.\n2. Večerní rutina (subject: 'Večerní rutina', topic: 'Večerní rutina') - večerní rituály a úkoly.\n3. Doplňující úkoly (subject: 'Denní plán', topic: 'Dodatečné úkoly') - pro obecné denní aktivity.\n\nFLEXIBILITA A NEZÁVISLOST NA PANELU:\nMůžeš pracovat s jakýmkoliv panelem a upravovat jej (Ranní rutinu, Večerní rutinu i Doplňující úkoly) bez ohledu na to, který panel má uživatel zrovna přepnutý a zobrazený na své obrazovce. Pokud tě požádá o přidání úkolu nebo rutinu, prostě to ulož do správného panelu. Dokážeš také přidat a vytvořit zcela nový panel s libovolným názvem (voláním display_study_card s vlastním subject and topic!). Nepřepínej ani nekomentuj neustále aktivní panel, pokud to není nutné. Uživatelovo přepínání panelů v rozhraní tě nesmí vůbec rozhodit.\n\nZPŮSOBY MAZÁNÍ, ÚPRAVY A POHYBU:\n1. POHYB MEZI DNY: Pokud uživatel požádá o přepnutí, zobrazení nebo přechod na jiný den, získej příslušné datum YYYY-MM-DD a zavolej funkci 'switch_view_day'.\n2. MAZÁNÍ CELÉHO PANELU NEBO DNE: Pokud chce uživatel smazat nebo odstranit celý panel, zavolej funkci `delete_plan_for_day` a vyplň jak cílové datum `targetDateStr` (např. '2026-05-24'), tak i parameter `subject` přesným českým názvem daného panelu (tj. 'Ranní rutina', 'Večerní rutina' nebo 'Denní plán'). Pokud po tobě chce uživatel vymazat kompletně VŠECHNY panely pro daný den, zavolej `delete_plan_for_day` pouze s datem `targetDateStr` a parametr `subject` nechej prázdný (null/nedefinovaný).\n3. MAZÁNÍ JEDNOTLIVÝCH ÚKOLŮ/POLOŽEK: Pokud tě uživatel požádá o smazání jedné konkrétní položky/úkolu z nějakého panelu, VŽDY nejprve zavolej `get_daily_plan` pro cílový den a konkrétní panel (`subject`). Až z odpovědi nástroje uvidíš stávající seznam úkolů na této kartě, odstraň z jejího Markdown obsahu pouze tento jeden nežádoucí řádek a ulož aktualizovanou podobu voláním `display_study_card` se stejným subject, topic a targetDateStr, ale bez smazaného řádku.\n4. OZNAČENÍ HOTOVÉHO ÚKOLU: Pokud chce uživatel odškrtnout nebo označit za splněný nějaký úkol z jakékoliv karty/rutiny, VŽDY nejprve zavolej `get_daily_plan` pro cílový den a konkrétní panel (`subject`). Až z odpovědi nástroje uvidíš stávající seznam úkolů na této kartě, označ ho jako dokončený tak, že na začátek řádku k němu napíšeš '[x]' (např. '- [x] Název úkolu'), a fyzicky tento řádek přesuň na úplný konec seznamu úkolů (dolů) na dané kartě! Poté zavolej funkci 'display_study_card' s upraveným uceleným seznamem úkolů pro daný den.\n5. OTEVŘENÍ NASTAVENÍ: Zavolej 'open_settings_view' při požadavku.\n\nVŽDY NEJPRVE POUŽIJ NÁSTROJ GET_DAILY_PLAN (NEZBYTNOST PRO ZAMEZENÍ CHYB):\nJe ABSOLUTNĚ KLÍČOVÉ, aby ses při přidávání, smazání, odškrtávání nebo jakýchkoli úpravách choval zodpovědně k předchozímu obsahu!\n1. Vždy, když tě uživatel požádá o jakoukoli změnu v úkolech (přidání nového úkolu, smazání konkrétního úkolu, odškrtnutí hotového úkolu), MUSÍŠ nejprve zavolat nástroj `get_daily_plan` pro cílový den a konkrétní panel (`subject`), abys měl stoprocentně přesné, aktuální a oddělené složení tohoto panelu!\n2. NIKDY nesmíš vzájemně míchat nebo kombinovat úkoly z jiných panelů (např. nemíchej úkoly z 'Doplňujících úkolů' do 'Ranní rutiny' apod.). Každý panel je zcela samostatný! Pokud máš dva panely (např. v jednom je procházka večer a ve druhém procházka večer, 2 služby a ještě něco), a uživatel tě požádá o odstranění procházky jen na tom prvním - zeptej se nebo zavolej `get_daily_plan` pro oba, abys odstranil úkol pouze z toho jednoho panelu vybraného uživatelem!\n3. After reading the current panel state from `get_daily_plan`, copy all existing lines of the panel first, then execute only the user-requested change. Never duplicate or remove unauthorized items.\n4. Výsledný parametr `content` zadaný do funkce `display_study_card` MUSÍ obsahovat VŠECHNY stávající úkoly tohoto panelu s provedenou úpravou. NIKDY nesmíš staré úkoly smazat nebo přepsat jen jedním novým řádkem, a nikdy nesmíš na kartu přidat cizí úkoly z jiných karet/dní! To by pro uživatele znamenalo katastrofální ztrátu dat a zmatek!\n\nSPRÁVNÉ POUŽITÍ PARAMETRŮ PRO DISPLAY_STUDY_CARD:\nPro přidání či změnu úkolů použij funkci `display_study_card` s přesnými určenými parametry:\n- Ranní rutina: `subject: \"Ranní rutina\"`, `topic: \"Ranní rutina\"`\n- Večerní rutina: `subject: \"Večerní rutina\"`, `topic: \"Večerní rutina\"`\n- Dodatečné / Doplňující úkoly dne: `subject: \"Denní plán\"`, `topic: \"Dodatečné úkoly\"`\n- `targetDateStr` musí být ve formátu `YYYY-MM-DD` pro ten den, kterého se plán týká (např. '2026-05-24').",
+          systemInstruction: `POZNÁMKA K INICIACI RELACE: Na začátku relace nebo po spuštění spojení NIKDY nic neříkej jako první, neposílej žádné automatické uvítání a nezačínej mluvit sám od sebe. Zůstaň naprosto potichu, neodpovídej na synchronizační systémové aktualizace a tiché aktualizace stavu, a vyčkej, až uživatel sám jako první promluví do mikrofonu!
+
+Jsi Shate, inteligentní hlasový asistent a osobní denní plánovač. Mluv česky, stručně, srozumitelně a klidně. Vždy vystupuj jako kluk/muž (mluv v mužském rodě, např. 'přidal jsem', 'naplánoval jsem').
+
+JSI POUZE KALENDÁŘ A PLÁNOVAČ - ZÁKAZ TVORBY SHRNUTÍ A VYHLEDÁVÁNÍ:
+Pokud se tě uživatel zeptá na libovolnou obecnou otázku nebo informaci, odpověz mu pouze stručně, lidsky a pouze hlasově. Je PŘÍSNĚ ZAKÁZÁNO k obecným otázkám vyhledávat informace na webu nebo vytvářet/měnit jakékoliv karty se shrnutím či lekce! Žádný nástroj (např. \`display_study_card\`) pro obecné otázky nevolat!
+
+TŘI SAMOSTATNÉ PANELY (GLOBÁLNÍ RUTINY VS DENNÍ ÚKOLY):
+Každý den má 3 samostatné panely, které mají odlišné seznamy úkolů:
+1. Ranní rutina: "Ranní rutina". Je to GLOBÁLNÍ RUTINA, která je pro všechny dny stejná a nemění se den ode dne. Pokud ji měníš, ukládej ji vždy se stejným subject "Ranní rutina" a targetDateStr "routine_morning".
+2. Večerní rutina: "Večerní rutina". Je to GLOBÁLNÍ RUTINA, která je pro všechny dny stejná a nemění se den ode dne. Pokud ji měníš, ukládej ji se subject "Večerní rutina" and targetDateStr "routine_evening".
+3. Denní plán (Doplňující úkoly): "Denní plán". Jsou to specifické úkoly pro konkrétní kalendářní den, které si uživatel plánuje každý den nově. Vždy se ukládá s datem targetDateStr patřičného dne.
+
+PŘÍSNÝ ZÁKAZ KROZ-KONTAMINACE SEZNAMŮ:
+- Každý panel je zcela autonomní. NIKDY nemíchej ani neslučuj úkoly mezi těmito panely!
+- Pokud chce uživatel odškrtnout, přidat nebo upravit úkol, a ty nevíš, ve kterém panelu leží, VŽDY nejprve zavolej funkci \`get_daily_plan\` BEZ parametru \`subject\` (subject nech prázdný). Tím získáš všechny 3 panely najonou! Poté v obdrženém textu vyhledej požadovaný úkol, uprav patřičný panel a ulož jej zpátky zavoláním \`display_study_card\` se správným subject (např. "Ranní rutina" s targetDateStr "routine_morning" nebo "Denní plán" se zvoleným datem)!
+- Pokud má uživatel podobný úkol ve dvou panelech a chce ho změnit pouze v jednom, uprav POUZE tento jeden konkrétní panel!
+
+ZPŮSOBY MAZÁNÍ, ÚPRAVY A POHYBU:
+1. POHYB MEZI DNY: Pokud uživatel požádá o přepnutí, zobrazení nebo přechod na jiný den, získej příslušné datum YYYY-MM-DD a zavolej funkci 'switch_view_day'.
+2. POHYB MEZI PANELY: Pokud uživatel požádá o přepnutí panelu (např. 'přejdi na ranní rutinu', 'zobraz večerní rutinu', 'přepni na denní plán'), zavolej funkci \`switch_panel\` se správným českým názvem cílového panelu (tj. 'Ranní rutina', 'Večerní rutina', nebo 'Denní plán').
+3. MAZÁNÍ CELÉHO PANELU NEBO DNE: Pokud chce uživatel smazat nebo odstranit celý panel, zavolej funkci \`delete_plan_for_day\` a vyplň jak cílové datum \`targetDateStr\` (např. '2026-05-24'), tak i parameter \`subject\` přesným českým názvem daného panelu.
+4. MAZÁNÍ JEDNOTLIVÝCH ÚKOLŮ/POLOŽEK: Pokud tě uživatel požádá o smazání jedné konkrétní položky/úkolu, zavolej \`get_daily_plan\` pro kontrolu všech panelů, odstraň tento jeden řádek a ulož aktualizovanou podobu voláním \`display_study_card\` se stejným subject.
+5. OZNAČENÍ HOTOVÉHO ÚKOLU: Pokud chce uživatel odškrtnout nějaký úkol, najdi ho v panelech (zavolej \`get_daily_plan\` bez subject), označ jej jako dokončený tak, že na začátek řádku k němu napíšeš '[x]' (např. '- [x] Název úkolu'), a fyzicky tento řádek přesuň na úplný konec seznamu úkolů (dolů) na dané kartě! Poté ulož změnu voláním \`display_study_card\` pro modifikovaný panel.
+6. OTEVŘENÍ NASTAVENÍ: Zavolej 'open_settings_view' při požadavku.`,
           outputAudioTranscription: {},
           inputAudioTranscription: {},
           tools: [
             {
               functionDeclarations: [
-                {
-                  name: "perform_web_research",
-                  description: "Spustí velmi podrobný průzkum a vyhledávání na pozadí k zadanému tématu, které pak budeš uživatele učit. Volat pouze při výslovném požadavku uživatele na hledání/research.",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      topic: {
-                        type: Type.STRING,
-                        description: "Téma nebo dotaz k podrobnému výzkumu."
-                      }
-                    },
-                    required: ["topic"]
-                  }
-                },
                 {
                   name: "change_voice_speed",
                   description: "Změní rychlost mluvení/hlasu asistenta Shate. Použít, pokud uživatel požádá o mluvení pomaleji / zpomalení nebo rychleji / zrychlení.",
@@ -661,13 +612,13 @@ Výsledek vrať VÝHRADNĚ jako platný JSON objekt se dvěma klíči:
                 },
                 {
                   name: "display_study_card",
-                  description: "Uloží a zobrazí v rozhraní uživatele kartu/panel s úkoly nebo rutinou pro daný den. Použij pro přidání, úpravu nebo splnění úkolů v ranní rutině, večerní rutině, doplňujících úkolech (Denním plánu) nebo v novém panelu.",
+                  description: "Uloží a zobrazí v rozhraní uživatele kartu/panel s úkoly nebo rutinou pro daný den. Použij po get_daily_plan pro přidání, úpravu nebo splnění úkolů v ranní rutině, večerní rutině nebo doplňujících úkolech (Denním plánu).",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
                       topic: {
                         type: Type.STRING,
-                        description: "Určuje název/okruh tématu panelu. Pro ranní rutinu zadej 'Ranní rutina', pro večerní rutinu zadej 'Večerní rutina', pro doplňující úkoly zadej 'Dodatečné úkoly', u nového vlastního panelu zadej jeho název."
+                        description: "Určuje název/okruh tématu panelu. Pro ranní rutinu zadej 'Ranní rutina', pro večerní rutinu zadej 'Večerní rutina', pro doplňující úkoly zadej 'Dodatečné úkoly'."
                       },
                       content: {
                         type: Type.STRING,
@@ -675,20 +626,7 @@ Výsledek vrať VÝHRADNĚ jako platný JSON objekt se dvěma klíči:
                       },
                       subject: {
                         type: Type.STRING,
-                        description: "Určuje hlavní název panelu/sekce. Pro ranní rutinu zadej 'Ranní rutina', pro večerní rutinu zadej 'Večerní rutina', pro doplňující úkoly zadej 'Denní plán', u nového vlastního panelu zadej jeho název."
-                      },
-                      osnova: {
-                        type: Type.STRING,
-                        description: "Pro plán dne / rutiny nastav hodnotu 'Rutina'."
-                      },
-                      lessonPlan: {
-                        type: Type.ARRAY,
-                        items: { type: Type.STRING },
-                        description: "Seznam lekcí, nepovinné, obvykle null."
-                      },
-                      lessonIndex: {
-                        type: Type.INTEGER,
-                        description: "Pořadové číslo (index) lekce, nepovinné."
+                        description: "Určuje hlavní název panelu/sekce. Pro ranní rutinu zadej 'Ranní rutina', pro večerní rutinu zadej 'Večerní rutina', pro doplňující úkoly zadej 'Denní plán'."
                       },
                       targetDateStr: {
                         type: Type.STRING,
@@ -700,94 +638,24 @@ Výsledek vrať VÝHRADNĚ jako platný JSON objekt se dvěma klíči:
                 },
                 {
                   name: "hide_card",
-                  description: "Zavře / skryje aktivní zobrazenou studijní kartu ze obrazovky. Použít, pokud tě uživatel požádá o zavření, skrytí nebo smazání karty.",
+                  description: "Zavře / skryje aktivní zobrazenou kartu ze obrazovky.",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {}
                   }
                 },
                 {
-                  name: "open_subject",
-                  description: "Zobrazí a otevře v rozhraní konkrétní předmět k výuce. Použít, když uživatel chce jít do daného předmětu (např. Matematika, Chemie).",
+                  name: "switch_panel",
+                  description: "Přepne aktivní zobrazený panel/kartu v uživatelském rozhraní (např. 'přejdi na ranní rutinu', 'zobraz večerní rutinu', 'přepni na denní plán').",
                   parameters: {
                     type: Type.OBJECT,
                     properties: {
-                      subject: {
+                      panel: {
                         type: Type.STRING,
-                        description: "Název školního předmětu k otevření."
+                        description: "Název panelu k zobrazení. Povolené hodnoty: 'Ranní rutina', 'Večerní rutina', 'Denní plán'."
                       }
                     },
-                    required: ["subject"]
-                  }
-                },
-                {
-                  name: "open_osnova",
-                  description: "Zobrazí a otevře v rozhraní konkrétní okruh/osnovu studijních lekcí. Použít, když uživatel požádá o otevření určitého tématu/osnovy.",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      subject: {
-                        type: Type.STRING,
-                        description: "Název předmětu."
-                      },
-                      osnova: {
-                        type: Type.STRING,
-                        description: "Název osnovy k otevření."
-                      }
-                    },
-                    required: ["subject", "osnova"]
-                  }
-                },
-                {
-                  name: "open_lesson",
-                  description: "Otevře a zobrazí konkrétní již vygenerovanou lekci k výuce. Použít, pokud uživatel chce studovat existující lekci dle indexu.",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      subject: {
-                        type: Type.STRING,
-                        description: "Název předmětu."
-                      },
-                      osnova: {
-                        type: Type.STRING,
-                        description: "Název osnovy."
-                      },
-                      lessonIndex: {
-                        type: Type.INTEGER,
-                        description: "Index lekce k otevření (např. 1, 2, 3)."
-                      }
-                    },
-                    required: ["subject", "osnova", "lessonIndex"]
-                  }
-                },
-                {
-                  name: "open_dashboard",
-                  description: "Zobrazí a otevře v rozhraní hlavní panel s přehledem všech předmětů (dashboard). Použít, když uživatel řekne 'ukaž předměty', 'přejdi na hlavní panel', 'zpět domů', 'zavři předmět' apod.",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {}
-                  }
-                },
-                {
-                  name: "delete_lessons_or_osnova",
-                  description: "Smaže konkrétní lekci nebo celou osnovu (studijní plán) se všemi lekcemi v daném předmětu. Volat, pokud tě uživatel požádá o smazání nebo odstranění konkrétní lekce nebo celé osnovy/tématu.",
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      subject: {
-                        type: Type.STRING,
-                        description: "Název předmětu (např. Chemie)."
-                      },
-                      osnova: {
-                        type: Type.STRING,
-                        description: "Název mazané osnovy."
-                      },
-                      lessonIndex: {
-                        type: Type.INTEGER,
-                        description: "Index konkrétní lekce, kterou chce uživatel smazat (např. 1, 2). Pokud chybí, smaže se celá osnova se všemi svými lekcemi."
-                      }
-                    },
-                    required: ["subject", "osnova"]
+                    required: ["panel"]
                   }
                 },
                 {
@@ -953,7 +821,8 @@ Výsledek vrať VÝHRADNĚ jako platný JSON objekt se dvěma klíči:
         : "Žádné existující karty dne.";
 
       // Invoke Gemini to generate textual conversational feedback and optional card structured content
-      const response = await ai.models.generateContent({
+      const activeAi = await getAiClient();
+      const response = await activeAi.models.generateContent({
         model: "gemini-3.5-flash",
         contents: `Jsi Shate, inteligentní osobní asistent a průvodce dnem. Vždy vystupuj jako kluk/muž (mluv v mužském rodě, např. 'naplánoval jsem', 'přidal jsem'). Uživatel ti napsal zprávu v češtině: "${message}".
 Tvoje odpověď musí být přátelská, srozumitelná, stručná a realizačně přesná.
@@ -1053,7 +922,8 @@ Nevracej žádný jiný text než čistý JSON.`,
 
       console.log("Analyzing uploaded image using gemini-3.5-flash...");
       
-      const response = await ai.models.generateContent({
+      const activeAi = await getAiClient();
+      const response = await activeAi.models.generateContent({
         model: "gemini-3.5-flash",
         contents: [
           {

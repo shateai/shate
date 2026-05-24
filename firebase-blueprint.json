@@ -49,12 +49,35 @@
         }
       },
       "required": ["topic", "content", "subject", "createdAt", "userId", "targetDateStr"]
+    },
+    "setting": {
+      "title": "Setting",
+      "description": "Globální konfigurace aplikace",
+      "type": "object",
+      "properties": {
+        "apiKey": {
+          "type": "string",
+          "description": "API klíč Gemini"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedBy": {
+          "type": "string"
+        }
+      },
+      "required": ["apiKey"]
     }
   },
   "firestore": {
     "study-cards/{cardId}": {
       "schema": "studyCard",
       "description": "Kolekce všech studijních karet vytvořených hlasovým asistentem"
+    },
+    "settings/{settingId}": {
+      "schema": "setting",
+      "description": "Globální nastavení jako sdílený Gemini API klíč"
     }
   }
 }

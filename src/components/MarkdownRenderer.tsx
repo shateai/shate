@@ -265,16 +265,16 @@ export default function MarkdownRenderer({ text, assistantTranscript, onToggleTa
               <div 
                 key={idx} 
                 onClick={() => onToggleTask?.(idx)}
-                className={`flex items-start gap-3 p-2 bg-[#0d0f1b]/60 border border-white/[3%] rounded-xl text-zinc-500 transition-all duration-250 my-1.5 opacity-35 line-through decoration-zinc-600 select-none ${
-                  onToggleTask ? "cursor-pointer hover:opacity-50" : ""
+                className={`flex items-start gap-3 p-2.5 bg-emerald-950/5 border border-emerald-500/10 rounded-xl text-zinc-400 opacity-65 line-through decoration-zinc-500/50 transition-all duration-250 my-1.5 select-none hover:bg-emerald-950/10 ${
+                  onToggleTask ? "cursor-pointer hover:opacity-85" : ""
                 }`}
               >
-                <div className="mt-1 flex-shrink-0">
-                  <div className="w-3.5 h-3.5 rounded bg-indigo-500/10 border border-zinc-600 flex items-center justify-center">
-                    <span className="text-[9px] font-black leading-none text-indigo-400">✓</span>
+                <div className="mt-0.5 flex-shrink-0">
+                  <div className="w-4 h-4 rounded bg-emerald-500/10 border border-emerald-400/30 flex items-center justify-center shadow-[0_0_8px_rgba(52,211,153,0.1)]">
+                    <span className="text-[10px] font-black leading-none text-emerald-400">✓</span>
                   </div>
                 </div>
-                <div className="flex-1 text-[11px] leading-relaxed font-semibold tracking-wide text-zinc-500">
+                <div className="flex-1 text-[11.5px] leading-relaxed font-semibold tracking-wide text-zinc-450">
                   {renderSentences(content)}
                 </div>
               </div>
@@ -285,14 +285,14 @@ export default function MarkdownRenderer({ text, assistantTranscript, onToggleTa
             <div 
               key={idx} 
               onClick={() => onToggleTask?.(idx)}
-              className={`flex items-start gap-3 p-2.5 bg-indigo-950/15 border border-[#4f5ff7]/10 rounded-xl text-zinc-200 transition-all duration-200 hover:bg-indigo-950/25 hover:border-[#4f5ff7]/30 my-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.2)] ${
-                onToggleTask ? "cursor-pointer" : ""
+              className={`flex items-start gap-3 p-2.5 bg-indigo-950/10 border border-[#4f5ff7]/10 rounded-xl text-zinc-200 transition-all duration-200 hover:bg-indigo-950/20 hover:border-[#4f5ff7]/25 my-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.15)] ${
+                onToggleTask ? "cursor-pointer hover:scale-[1.005]" : ""
               }`}
             >
-              <div className="mt-1.5 flex-shrink-0">
-                <div className="w-3.5 h-3.5 rounded border border-[#4f5ff7]/40 flex items-center justify-center bg-indigo-950/25 group-hover:border-[#4f5ff7]" />
+              <div className="mt-1 flex-shrink-0">
+                <div className="w-4 h-4 rounded border border-white/[15%] flex items-center justify-center bg-white/[0.01] hover:border-[#4f5ff7]/40" />
               </div>
-              <div className="flex-1 text-[11.5px] leading-relaxed font-semibold tracking-wide text-zinc-100 drop-shadow-[0_0_4px_rgba(165,180,252,0.25)]">
+              <div className="flex-1 text-[11.5px] leading-relaxed font-semibold tracking-wide text-zinc-150 drop-shadow-[0_0_4px_rgba(165,180,252,0.15)]">
                 {renderSentences(content)}
               </div>
             </div>

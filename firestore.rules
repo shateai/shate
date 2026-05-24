@@ -73,5 +73,11 @@ service cloud.firestore {
                     && isSignedIn()
                     && isOwner(resource.data.userId);
     }
+
+    // Rules for Settings collection (dynamic Gemini API key)
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isSignedIn() && isValidId(settingId);
+    }
   }
 }
