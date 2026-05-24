@@ -5,23 +5,78 @@
   "categories": ["productivity", "utilities", "social"],
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#09090b",
-  "theme_color": "#2563eb",
+  "background_color": "#070913",
+  "theme_color": "#4f5ff7",
   "orientation": "any",
   "scope": "./",
   "id": "shate-ai-assistant",
+  "dir": "ltr",
+  "lang": "cs",
+  "display_override": [
+    "standalone",
+    "window-controls-overlay",
+    "minimal-ui"
+  ],
   "icons": [
     {
       "src": "icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
       "src": "icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "icons/512x512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icons/512x512-monochrome.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "monochrome"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "screenshot-desktop.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Shate Assistant - Desktop View"
+    },
+    {
+      "src": "screenshot-mobile.png",
+      "sizes": "720x1280",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Shate Assistant - Mobile View"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Ranní rutina",
+      "short_name": "Ranní",
+      "url": "./?panel=morning",
+      "description": "Zobrazit ranní rutinu"
+    },
+    {
+      "name": "Denní plán",
+      "short_name": "Denní",
+      "url": "./?panel=daily",
+      "description": "Zobrazit denní úkoly"
+    },
+    {
+      "name": "Večerní rutina",
+      "short_name": "Večerní",
+      "url": "./?panel=evening",
+      "description": "Zobrazit večerní rutinu"
     }
   ]
 }
