@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, FormEvent, TouchEvent } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Smartphone, Mic, PhoneOff, Sparkles, X, History, ChevronLeft, ChevronRight, Calendar, ArrowLeft, LogIn, Clock, Settings, LogOut, Sliders, Zap, Key } from "lucide-react";
+import { Smartphone, Mic, PhoneOff, Sparkles, X, History, ChevronLeft, ChevronRight, Calendar, ArrowLeft, LogIn, Clock, Settings, LogOut, Sliders, Zap, Key, AlertCircle } from "lucide-react";
 import { pcmToBase64, base64ToFloat32 } from "./lib/audio-utils";
 import { collection, addDoc, query, where, orderBy, onSnapshot, deleteDoc, doc, serverTimestamp, updateDoc, setDoc } from "firebase/firestore";
 import { db, auth } from "./lib/firebase";
@@ -152,6 +152,10 @@ export default function App() {
 
   // Unified chat history for current session
   const [chatHistory, setChatHistory] = useState<Array<{ id: string; userText?: string; assistantText?: string; timestamp: Date }>>([]);
+  const [permissionError, setPermissionError] = useState<{
+    type: "mic" | "camera" | "general";
+    message: string;
+  } | null>(null);
 
   const isNewTurnRef = useRef<boolean>(true);
   const wsRef = useRef<WebSocket | null>(null);
@@ -1050,9 +1054,34 @@ export default function App() {
       ws.onclose = () => stopSession();
       ws.onerror = () => setStatus("Chyba spojení");
 
-    } catch (err) {
+    } catch (err: any) {
       console.error("Session start crash:", err);
-      setStatus("Chyba při startu");
+      
+      let friendlyMessage = "Při zahájení relace došlo k chybě. Ověřte prosím, že systém nebo prohlížeč neblokuje přístup k mikrofonu.";
+      let errType: "mic" | "camera" | "general" = "general";
+
+      const errName = err?.name || "";
+      const errMsg = err?.message || "";
+
+      if (errName === "NotAllowedError" || errName === "PermissionDeniedError" || errMsg.toLowerCase().includes("permission denied")) {
+        friendlyMessage = "Přístup k mikrofonu byl zamítnut. Povolte prosím mikrofon v nastavení svého webového prohlížeče nebo operačního systému a zkuste to znovu.";
+        errType = "mic";
+      } else if (errName === "NotFoundError" || errName === "DevicesNotFoundError") {
+        friendlyMessage = "Nebylo nalezeno žádné funkční mikrofonní zařízení. Zkontrolujte připojení mikrofonu a zkuste to znovu.";
+        errType = "mic";
+      } else if (errName === "SecurityError") {
+        friendlyMessage = "Přístup k mikrofonu je blokován z bezpečnostních důvodů (spuštění v izolovaném iframe ráchu přehrávače). Klikněte prosím na tlačítko 'Otevřít v nové záložce' (Open in separate tab) v pravém horním rohu AI Studio rozhraní, aby měl prohlížeč přímý přístup pro registraci zvukového vstupu.";
+        errType = "mic";
+      } else if (errMsg.toLowerCase().includes("permission")) {
+        friendlyMessage = "Oprávnění k mikrofonu je vyžadováno pro živou hlasovou komunikaci se Shate.";
+        errType = "mic";
+      }
+
+      setPermissionError({
+        type: errType,
+        message: friendlyMessage
+      });
+      setStatus("Chyba oprávnění");
     }
   };
 
@@ -1646,6 +1675,58 @@ export default function App() {
                   >
                     <LogOut className="w-3.5 h-3.5" />
                     Odhlásit se
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Permission Error Modal */}
+      <AnimatePresence>
+        {permissionError && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-black/85 backdrop-blur-md z-[60] flex items-center justify-center p-4 text-center"
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              className="bg-[#111322] border border-rose-500/25 rounded-[24px] w-full max-w-sm p-6 shadow-2xl relative"
+            >
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-12 h-12 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+                  <AlertCircle className="w-6 h-6" />
+                </div>
+                
+                <h3 className="text-sm font-black tracking-wider text-rose-300 uppercase mt-2">
+                  Chyba oprávnění
+                </h3>
+                
+                <p className="text-xs text-zinc-300 leading-relaxed mt-1 text-left bg-zinc-950/40 p-3 rounded-xl border border-white/[5%]">
+                  {permissionError.message}
+                </p>
+
+                <div className="flex flex-col gap-2 w-full pt-4">
+                  <button
+                    onClick={() => {
+                      setPermissionError(null);
+                      startSession();
+                    }}
+                    className="w-full h-10 bg-indigo-600 hover:bg-[#5f6ff7] text-white text-xs font-bold uppercase rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    Zkusit znovu
+                  </button>
+
+                  <button
+                    onClick={() => setPermissionError(null)}
+                    className="w-full h-10 bg-white/[0.03] hover:bg-white/[0.08] border border-white/[5%] text-zinc-400 hover:text-white text-xs font-bold uppercase rounded-xl transition-all cursor-pointer"
+                  >
+                    Zavřít
                   </button>
                 </div>
               </div>
