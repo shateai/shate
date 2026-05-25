@@ -19,25 +19,25 @@
   ],
   "icons": [
     {
-      "src": "icon-192.png?v=2",
+      "src": "icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "icon-512.png?v=2",
+      "src": "icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "icons/512x512-maskable.png?v=2",
+      "src": "icons/512x512-maskable.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
     },
     {
-      "src": "icons/512x512-monochrome.png?v=2",
+      "src": "icons/512x512-monochrome.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "monochrome"
@@ -45,14 +45,14 @@
   ],
   "screenshots": [
     {
-      "src": "screenshot-desktop.png?v=2",
+      "src": "screenshot-desktop.png",
       "sizes": "1280x720",
       "type": "image/png",
       "form_factor": "wide",
       "label": "Shate Assistant - Desktop View"
     },
     {
-      "src": "screenshot-mobile.png?v=2",
+      "src": "screenshot-mobile.png",
       "sizes": "720x1280",
       "type": "image/png",
       "form_factor": "narrow",
@@ -67,7 +67,7 @@
       "description": "Zobrazit ranní rutinu",
       "icons": [
         {
-          "src": "icon-192.png?v=2",
+          "src": "icon-192.png",
           "sizes": "192x192"
         }
       ]
@@ -79,7 +79,7 @@
       "description": "Zobrazit denní úkoly",
       "icons": [
         {
-          "src": "icon-192.png?v=2",
+          "src": "icon-192.png",
           "sizes": "192x192"
         }
       ]
@@ -91,7 +91,7 @@
       "description": "Zobrazit večerní rutinu",
       "icons": [
         {
-          "src": "icon-192.png?v=2",
+          "src": "icon-192.png",
           "sizes": "192x192"
         }
       ]
