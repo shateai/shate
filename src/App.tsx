@@ -1064,16 +1064,16 @@ export default function App() {
       const errMsg = err?.message || "";
 
       if (errName === "NotAllowedError" || errName === "PermissionDeniedError" || errMsg.toLowerCase().includes("permission denied")) {
-        friendlyMessage = "Přístup k mikrofonu byl zamítnut. Povolte prosím mikrofon v nastavení svého webového prohlížeče nebo operačního systému a zkuste to znovu.";
+        friendlyMessage = "Přístup k mikrofonu byl zamítnut.\n\nPokud jste mikrofon již povolili, prohlížeč přesto blokuje přístup, protože aplikace běží uvnitř zabezpečeného rámu (iframe) v AI Studio.\n\n👉 Klikněte prosím na tlačítko 'Otevřít v samostatné záložce' (ikona šipky ven z okna) v pravém horním rohu náhledu nad aplikací, aby mohl prohlížeč bezpečně zvuk nahrávat.";
         errType = "mic";
       } else if (errName === "NotFoundError" || errName === "DevicesNotFoundError") {
         friendlyMessage = "Nebylo nalezeno žádné funkční mikrofonní zařízení. Zkontrolujte připojení mikrofonu a zkuste to znovu.";
         errType = "mic";
       } else if (errName === "SecurityError") {
-        friendlyMessage = "Přístup k mikrofonu je blokován z bezpečnostních důvodů (spuštění v izolovaném iframe ráchu přehrávače). Klikněte prosím na tlačítko 'Otevřít v nové záložce' (Open in separate tab) v pravém horním rohu AI Studio rozhraní, aby měl prohlížeč přímý přístup pro registraci zvukového vstupu.";
+        friendlyMessage = "Přístup k mikrofonu je blokován z bezpečnostních důvodů (spuštění v izolovaném iframe rámu přehrávače). Klikněte prosím na tlačítko 'Otevřít v nové záložce' (Open in separate tab) v pravém horním rohu AI Studio rozhraní, aby měl prohlížeč přímý přístup pro registraci zvukového vstupu.";
         errType = "mic";
       } else if (errMsg.toLowerCase().includes("permission")) {
-        friendlyMessage = "Oprávnění k mikrofonu je vyžadováno pro živou hlasovou komunikaci se Shate.";
+        friendlyMessage = "Oprávnění k mikrofonu je vyžadováno pro živou hlasovou komunikaci se Shate. Spusťte prosím aplikaci v samostatné záložce.";
         errType = "mic";
       }
 
@@ -1707,7 +1707,7 @@ export default function App() {
                   Chyba oprávnění
                 </h3>
                 
-                <p className="text-xs text-zinc-300 leading-relaxed mt-1 text-left bg-zinc-950/40 p-3 rounded-xl border border-white/[5%]">
+                <p className="text-xs text-zinc-300 leading-relaxed mt-1 text-left bg-zinc-950/40 p-3 rounded-xl border border-white/[5%] whitespace-pre-line">
                   {permissionError.message}
                 </p>
 
